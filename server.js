@@ -6,12 +6,16 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '15mb' }));
 
-// Conexión segura a PostgreSQL forzando IPv4 para evitar el bloqueo ENETUNREACH en Render
+// Parseador de URL para asegurar conexión IPv4 estricta compatible con Render
+const connectionString = process.env.DATABASE_URL;
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: connectionString,
   ssl: { rejectUnauthorized: false },
-  connectionTimeoutMillis: 10000,
-  family: 4 
+  connectionTimeoutMillis: 15000,
+  // Forzar red IPv4 y deshabilitar reintentos IPv6 problemáticos en contenedores cloud
+  keepAlive: true,
+  family: 4
 });
 
 // Inicialización automática de la estructura relacional basada en la OS

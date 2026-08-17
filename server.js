@@ -178,6 +178,15 @@ app.post('/api/asignaciones/:os/modulo', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.delete('/api/asignaciones/:os', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM asignaciones WHERE os = $1', [req.params.os]);
+    res.json({ success: true, message: 'Asignación eliminada' });
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
+});
+
 // --- ENDPOINTS DE RENDICIONES Y VIÁTICOS ---
 app.get('/api/rendiciones/general', async (req, res) => {
   try {

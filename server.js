@@ -113,20 +113,40 @@ app.delete('/api/usuarios/:id', async (req, res) => {
 });
 
 // --- ENDPOINTS DE ASIGNACIONES ---
-// Endpoint para obtener todas las asignaciones
+
+// Endpoint para obtener todas las asignaciones (Dashboard Coordinador)
 app.get('/api/asignaciones/general', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM asignaciones');
-    res.json(result.rows);
+    
+    // FIX INTEGRAL: Mapeamos el JSON para corregir la minúscula forzada por PostgreSQL
+    const asignacionesFix = result.rows.map(row => {
+      return {
+        ...row,
+        // PostgreSQL envía "reporteconfig", nosotros lo forzamos a "reporteConfig" para que la App lo lea.
+        reporteConfig: row.reporteconfig || row.reporteConfig || null
+      };
+    });
+    
+    res.json(asignacionesFix);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Endpoint filtrado por usuario (FIX para la App)
+// Endpoint filtrado por usuario (FIX para la App Monitoristas)
 app.get('/api/asignaciones/:username', async (req, res) => {
   const { username } = req.params;
   try {
     const result = await pool.query('SELECT * FROM asignaciones WHERE LOWER(ins) = LOWER($1)', [username]);
-    res.json(result.rows);
+    
+    // FIX INTEGRAL: Mapeamos el JSON para el Monitorista
+    const asignacionesFix = result.rows.map(row => {
+      return {
+        ...row,
+        reporteConfig: row.reporteconfig || row.reporteConfig || null
+      };
+    });
+    
+    res.json(asignacionesFix);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -249,7 +269,7 @@ app.post('/api/reporte-campo', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- HOJA DE RUTA (Placeholder si existía) ---
+// --- HOJA DE RUTA ---
 app.get('/api/hoja-ruta/:os', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM asignaciones WHERE os = $1', [req.params.os]);

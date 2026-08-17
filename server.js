@@ -162,6 +162,16 @@ app.get('/api/rendiciones/general', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// --- NUEVO: ENDPOINT PARA ASIGNACIONES FILTRADAS POR USUARIO/INSPECTOR ---
+app.get('/api/asignaciones/:username', async (req, res) => {
+  const { username } = req.params;
+  try {
+    // Filtramos la base de datos usando el campo 'ins' (inspector)
+    const result = await pool.query('SELECT * FROM asignaciones WHERE ins = $1', [username]);
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.put('/api/rendiciones/:id/estado', async (req, res) => {
   const { estado, motivo_revision } = req.body;
   try {

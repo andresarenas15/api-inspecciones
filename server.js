@@ -17,17 +17,20 @@ server.use(jsonServer.rewriter({
   '/api/*': '/$1'
 }));
 
-// 🔥 CREADOR AUTOMÁTICO DE TABLAS 🔥
+// 🔥 CREADOR AUTOMÁTICO DEFINITIVO (Soluciona el Error 404) 🔥
 server.use((req, res, next) => {
-  // Solo actuamos si se está intentando guardar nueva información (POST)
-  if (req.method === 'POST') {
-    const db = router.db; // Acceso directo a db.json
-    const recurso = req.path.split('/')[1]; // Obtiene el nombre del módulo (ej: "usuarios")
+  // Extraemos el nombre de la tabla de la ruta (ej: de "/usuarios" extrae "usuarios")
+  const pathParts = req.path.split('/').filter(p => p !== '');
+  const recurso = pathParts[0];
+
+  if (recurso) {
+    const db = router.db; // Referencia directa a db.json
     
-    // Si la tabla (recurso) no existe en db.json, la crea al instante como []
-    if (recurso && !db.has(recurso).value()) {
+    // Si la tabla (recurso) no existe, la crea instantáneamente como un arreglo vacío.
+    // Esto evita el Error 404 cuando el Dashboard hace un GET por primera vez.
+    if (!db.has(recurso).value()) {
       db.set(recurso, []).write();
-      console.log(`¡Nueva tabla creada automáticamente: ${recurso}!`);
+      console.log(`[Auto-DB] Nueva tabla creada automáticamente: ${recurso}`);
     }
   }
   next();

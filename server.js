@@ -92,10 +92,12 @@ async function initDB() {
 
 initDB();
 
-// --- ENDPOINTS DE USUARIOS ---
-app.get('/api/usuarios', async (req, res) => {
+// --- ENDPOINT NORMALIZADO (CASE-INSENSITIVE) ---
+app.get('/api/asignaciones/:username', async (req, res) => {
+  const { username } = req.params;
   try {
-    const result = await pool.query('SELECT * FROM usuarios');
+    // Usamos LOWER para comparar ambos lados en minúsculas, evitando errores de tipeo o mayúsculas
+    const result = await pool.query('SELECT * FROM asignaciones WHERE LOWER(ins) = LOWER($1)', [username]);
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

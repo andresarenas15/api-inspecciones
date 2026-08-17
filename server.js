@@ -2,12 +2,15 @@ const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: '15mb' }));
+
 // Conexión segura a PostgreSQL forzando IPv4 para evitar el bloqueo ENETUNREACH en Render
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
   connectionTimeoutMillis: 10000,
-  // Fuerza a utilizar redes IPv4 compatibles con la infraestructura gratuita de Render
   family: 4 
 });
 
@@ -127,6 +130,21 @@ app.post('/api/asignaciones', async (req, res) => {
       [r.os, r.id, r.project, r.client, r.ins, r.start, r.end, r.state, r.day, JSON.stringify(r.tasks), JSON.stringify(r.addresses), JSON.stringify(r.reporteConfig), r.progress]
     );
     res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 🔥 ENDPOINT UNIVERSAL DINÁMICO PARA MÓDULOS DE LA APP (Aislamiento por OS)
+app.post('/api/asignaciones/:os/modulo', async (req, res) => {
+  const { os } = req.params;
+  const { moduloName, data } = req.body; // Ej: moduloName = "verificacion_equipos", data = { ...items... }
+  try {
+    await pool.query(
+      `UPDATE asignaciones 
+       SET modules_data = jsonb_set(COALESCE(modules_data, '{}'::jsonb), ARRAY[$1], $2::jsonb)
+       WHERE os = $3`,
+      [moduloName, JSON.stringify(data), os]
+    );
+    res.json({ success: true, message: `Módulo ${moduloName} guardado para la OS ${os}` });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

@@ -6,18 +6,12 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '15mb' }));
 
-// Extracción manual de la URL de Supabase para forzar conexión IPv4 directa por host
-const url = new URL(process.env.DATABASE_URL);
-
+// Conexión segura forzando IPv4 para evitar el error ENETUNREACH en Render
 const pool = new Pool({
-  host: url.hostname,
-  port: url.port || 5432,
-  database: url.pathname.slice(1),
-  user: url.username,
-  password: url.password,
+  connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
   connectionTimeoutMillis: 15000,
-  family: 4 // Forzar estrictamente protocolo IPv4 a nivel de socket
+  family: 4 
 });
 
 // Inicialización automática de la estructura relacional basada en la OS
@@ -92,12 +86,10 @@ async function initDB() {
 
 initDB();
 
-// --- ENDPOINT NORMALIZADO (CASE-INSENSITIVE) ---
-app.get('/api/asignaciones/:username', async (req, res) => {
-  const { username } = req.params;
+// --- ENDPOINTS DE USUARIOS ---
+app.get('/api/usuarios', async (req, res) => {
   try {
-    // Usamos LOWER para comparar ambos lados en minúsculas, evitando errores de tipeo o mayúsculas
-    const result = await pool.query('SELECT * FROM asignaciones WHERE LOWER(ins) = LOWER($1)', [username]);
+    const result = await pool.query('SELECT * FROM usuarios');
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -120,10 +112,20 @@ app.delete('/api/usuarios/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- ENDPOINTS DE ASIGNACIONES (AISLAMIENTO ABSOLUTO POR OS) ---
+// --- ENDPOINTS DE ASIGNACIONES ---
+// Endpoint para obtener todas las asignaciones
 app.get('/api/asignaciones/general', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM asignaciones');
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Endpoint filtrado por usuario (FIX para la App)
+app.get('/api/asignaciones/:username', async (req, res) => {
+  const { username } = req.params;
+  try {
+    const result = await pool.query('SELECT * FROM asignaciones WHERE LOWER(ins) = LOWER($1)', [username]);
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -141,7 +143,7 @@ app.post('/api/asignaciones', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 🔥 ENDPOINT UNIVERSAL DINÁMICO PARA MÓDULOS DE LA APP (Aislamiento por OS)
+// 🔥 ENDPOINT DINÁMICO PARA MÓDULOS DE LA APP
 app.post('/api/asignaciones/:os/modulo', async (req, res) => {
   const { os } = req.params;
   const { moduloName, data } = req.body;
@@ -164,13 +166,21 @@ app.get('/api/rendiciones/general', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- NUEVO: ENDPOINT PARA ASIGNACIONES FILTRADAS POR USUARIO/INSPECTOR ---
-app.get('/api/asignaciones/:username', async (req, res) => {
-  const { username } = req.params;
+app.get('/api/rendiciones/:username', async (req, res) => {
   try {
-    // Filtramos la base de datos usando el campo 'ins' (inspector)
-    const result = await pool.query('SELECT * FROM asignaciones WHERE ins = $1', [username]);
+    const result = await pool.query('SELECT * FROM rendiciones WHERE username_creador = $1', [req.params.username]);
     res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/rendiciones', async (req, res) => {
+  const r = req.body;
+  try {
+    await pool.query(
+      'INSERT INTO rendiciones (id, os, username_creador, total_gastado, estado, items_rendicion) VALUES ($1, $2, $3, $4, $5, $6)',
+      [r.id, r.os, r.username_creador, r.total_gastado, r.estado, JSON.stringify(r.items_rendicion)]
+    );
+    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -189,6 +199,24 @@ app.get('/api/viaticos/general', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/viaticos/:username', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM viaticos WHERE username_creador = $1', [req.params.username]);
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/viaticos', async (req, res) => {
+  const r = req.body;
+  try {
+    await pool.query(
+      'INSERT INTO viaticos (id, os, username_creador, total, estado, items_viatico) VALUES ($1, $2, $3, $4, $5, $6)',
+      [r.id, r.os, r.username_creador, r.total, r.estado, JSON.stringify(r.items_viatico)]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.put('/api/viaticos/:id/estado', async (req, res) => {
   const { estado, motivo_revision } = req.body;
   try {
@@ -202,6 +230,41 @@ app.get('/api/reporte-campo/:os', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM reporte_campo WHERE os = $1', [req.params.os]);
     res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/reporte-campo/:os/:parametro', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM reporte_campo WHERE os = $1 AND parametro = $2', [req.params.os, req.params.parametro]);
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/reporte-campo', async (req, res) => {
+  const r = req.body;
+  try {
+    await pool.query('INSERT INTO reporte_campo (os, submatriz, parametro, punto, reporte) VALUES ($1, $2, $3, $4, $5)', 
+    [r.os, r.submatriz, r.parametro, r.punto, r.reporte]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// --- HOJA DE RUTA (Placeholder si existía) ---
+app.get('/api/hoja-ruta/:os', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM asignaciones WHERE os = $1', [req.params.os]);
+    res.json(result.rows[0] ? result.rows[0].modules_data?.hoja_ruta : null);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/hoja-ruta', async (req, res) => {
+  const r = req.body;
+  try {
+    await pool.query(
+      'UPDATE asignaciones SET modules_data = jsonb_set(COALESCE(modules_data, \'{}\'::jsonb), \'{hoja_ruta}\', $1::jsonb) WHERE os = $2',
+      [JSON.stringify(r), r.os]
+    );
+    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

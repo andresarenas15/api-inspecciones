@@ -2,14 +2,13 @@ const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 
-const app = express();
-app.use(cors());
-app.use(express.json({ limit: '15mb' }));
-
-// Conexión segura a PostgreSQL en la nube mediante variable de entorno
+// Conexión segura a PostgreSQL forzando IPv4 para evitar el bloqueo ENETUNREACH en Render
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  ssl: { rejectUnauthorized: false },
+  connectionTimeoutMillis: 10000,
+  // Fuerza a utilizar redes IPv4 compatibles con la infraestructura gratuita de Render
+  family: 4 
 });
 
 // Inicialización automática de la estructura relacional basada en la OS

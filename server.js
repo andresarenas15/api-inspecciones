@@ -6,16 +6,18 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '15mb' }));
 
-// Parseador de URL para asegurar conexión IPv4 estricta compatible con Render
-const connectionString = process.env.DATABASE_URL;
+// Extracción manual de la URL de Supabase para forzar conexión IPv4 directa por host
+const url = new URL(process.env.DATABASE_URL);
 
 const pool = new Pool({
-  connectionString: connectionString,
+  host: url.hostname,
+  port: url.port || 5432,
+  database: url.pathname.slice(1),
+  user: url.username,
+  password: url.password,
   ssl: { rejectUnauthorized: false },
   connectionTimeoutMillis: 15000,
-  // Forzar red IPv4 y deshabilitar reintentos IPv6 problemáticos en contenedores cloud
-  keepAlive: true,
-  family: 4
+  family: 4 // Forzar estrictamente protocolo IPv4 a nivel de socket
 });
 
 // Inicialización automática de la estructura relacional basada en la OS
@@ -140,7 +142,7 @@ app.post('/api/asignaciones', async (req, res) => {
 // 🔥 ENDPOINT UNIVERSAL DINÁMICO PARA MÓDULOS DE LA APP (Aislamiento por OS)
 app.post('/api/asignaciones/:os/modulo', async (req, res) => {
   const { os } = req.params;
-  const { moduloName, data } = req.body; // Ej: moduloName = "verificacion_equipos", data = { ...items... }
+  const { moduloName, data } = req.body;
   try {
     await pool.query(
       `UPDATE asignaciones 

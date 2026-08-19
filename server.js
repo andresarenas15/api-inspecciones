@@ -4,9 +4,9 @@ const { Pool } = require('pg');
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '15mb' }));
+app.use(express.json({ limit: '25mb' }));
 
-// Conexión segura forzando IPv4 para evitar el error ENETUNREACH en Render
+// Conexión segura forzando IPv4
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
@@ -14,9 +14,13 @@ const pool = new Pool({
   family: 4  
 });
 
-// Inicialización automática de la estructura relacional basada en la OS y Módulos
+// Helper para evitar errores "undefined" o strings vacíos en fechas/números
+const safeVal = (v) => (v !== undefined && v !== '') ? v : null;
+
+// Inicialización de la estructura relacional y EXPANSIÓN FORZADA DE TABLAS EXISTENTES
 async function initDB() {
   try {
+    // 1. Crear tablas si no existen
     await pool.query(`
       CREATE TABLE IF NOT EXISTS usuarios (
         id SERIAL PRIMARY KEY,
@@ -47,25 +51,10 @@ async function initDB() {
         id VARCHAR(100) PRIMARY KEY,
         os VARCHAR(100) REFERENCES asignaciones(os) ON DELETE CASCADE,
         username_creador VARCHAR(100),
-        area VARCHAR(100),
-        fecha_sol TIMESTAMP,
-        lugar_servicio VARCHAR(255),
-        proyecto VARCHAR(255),
-        fecha_salida TIMESTAMP,
-        fecha_inicio TIMESTAMP,
-        fecha_termino TIMESTAMP,
-        dias_ope INT,
         ejecutivo VARCHAR(255),
-        inspector1 VARCHAR(100),
-        inspector2 VARCHAR(100),
-        inspector3 VARCHAR(100),
-        hora_inicio VARCHAR(20),
-        hora_fin VARCHAR(20),
         observaciones TEXT,
         detalles TEXT,
-        realizado VARCHAR(100),
         total_gastado NUMERIC,
-        viaticos NUMERIC,
         estado VARCHAR(50) DEFAULT 'Pendiente',
         motivo_revision TEXT,
         items_rendicion JSONB
@@ -75,23 +64,9 @@ async function initDB() {
         id VARCHAR(100) PRIMARY KEY,
         os VARCHAR(100) REFERENCES asignaciones(os) ON DELETE CASCADE,
         username_creador VARCHAR(100),
-        area VARCHAR(100),
-        fecha_sol TIMESTAMP,
-        lugar_servicio VARCHAR(255),
-        proyecto VARCHAR(255),
-        fecha_salida TIMESTAMP,
-        fecha_inicio TIMESTAMP,
-        fecha_termino TIMESTAMP,
-        dias_ope INT,
         ejecutivo VARCHAR(255),
-        inspector1 VARCHAR(100),
-        inspector2 VARCHAR(100),
-        inspector3 VARCHAR(100),
-        hora_inicio VARCHAR(20),
-        hora_fin VARCHAR(20),
+        dias_ope INT,
         detalles TEXT,
-        realizado VARCHAR(100),
-        observaciones TEXT,
         total NUMERIC,
         estado VARCHAR(50) DEFAULT 'Pendiente',
         motivo_revision TEXT,
@@ -124,7 +99,42 @@ async function initDB() {
         reporte TEXT
       );
     `);
-    console.log("[PostgreSQL] Tablas e infraestructura de OS inicializadas correctamente con todos sus campos.");
+
+    // 2. FORZAR EXPANSIÓN DE TABLAS EXISTENTES (El fix definitivo)
+    await pool.query(`
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS area VARCHAR(100);
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS fecha_sol TIMESTAMP;
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS lugar_servicio VARCHAR(255);
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS proyecto VARCHAR(255);
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS fecha_salida TIMESTAMP;
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS fecha_inicio TIMESTAMP;
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS fecha_termino TIMESTAMP;
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS dias_ope INT;
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS inspector1 VARCHAR(100);
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS inspector2 VARCHAR(100);
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS inspector3 VARCHAR(100);
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS hora_inicio VARCHAR(20);
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS hora_fin VARCHAR(20);
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS viaticos NUMERIC;
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS realizado VARCHAR(100);
+
+      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS area VARCHAR(100);
+      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS fecha_sol TIMESTAMP;
+      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS lugar_servicio VARCHAR(255);
+      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS proyecto VARCHAR(255);
+      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS fecha_salida TIMESTAMP;
+      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS fecha_inicio TIMESTAMP;
+      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS fecha_termino TIMESTAMP;
+      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS inspector1 VARCHAR(100);
+      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS inspector2 VARCHAR(100);
+      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS inspector3 VARCHAR(100);
+      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS hora_inicio VARCHAR(20);
+      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS hora_fin VARCHAR(20);
+      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS realizado VARCHAR(100);
+      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS observaciones TEXT;
+    `);
+
+    console.log("[PostgreSQL] Tablas inicializadas y columnas faltantes agregadas con éxito.");
   } catch (err) {
     console.error("[PostgreSQL] Error crítico al inicializar la base de datos:", err);
   }
@@ -205,18 +215,11 @@ app.post('/api/asignaciones/:os/modulo', async (req, res) => {
        WHERE os = $3`,
       [moduloName, JSON.stringify(data), os]
     );
-    res.json({ success: true, message: `Módulo ${moduloName} guardado para la OS ${os}` });
+    res.json({ success: true, message: `Módulo ${moduloName} guardado` });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/asignaciones/:os', async (req, res) => {
-  try {
-    await pool.query('DELETE FROM asignaciones WHERE os = $1', [req.params.os]);
-    res.json({ success: true, message: 'Asignación eliminada' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// --- ENDPOINTS DE RENDICIONES (CON TODOS LOS CAMPOS) ---
+// --- ENDPOINTS DE RENDICIONES ---
 app.get('/api/rendiciones/general', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM rendiciones');
@@ -250,15 +253,18 @@ app.post('/api/rendiciones', async (req, res) => {
         total_gastado = EXCLUDED.total_gastado, viaticos = EXCLUDED.viaticos, observaciones = EXCLUDED.observaciones,
         detalles = EXCLUDED.detalles, realizado = EXCLUDED.realizado, estado = EXCLUDED.estado, motivo_revision = EXCLUDED.motivo_revision`,
       [
-        r.id, r.os, r.username_creador, r.area, r.fecha_sol, r.lugar_servicio, r.proyecto,
-        r.fecha_salida, r.fecha_inicio, r.fecha_termino, r.dias_ope, r.ejecutivo,
-        r.inspector1, r.inspector2, r.inspector3, r.hora_inicio, r.hora_fin,
-        JSON.stringify(r.items_rendicion || []), r.total_gastado, r.viaticos, 
-        r.observaciones, r.detalles, r.realizado, r.estado, r.motivo_revision
+        safeVal(r.id), safeVal(r.os), safeVal(r.username_creador), safeVal(r.area), safeVal(r.fecha_sol), safeVal(r.lugar_servicio), safeVal(r.proyecto),
+        safeVal(r.fecha_salida), safeVal(r.fecha_inicio), safeVal(r.fecha_termino), safeVal(r.dias_ope), safeVal(r.ejecutivo),
+        safeVal(r.inspector1), safeVal(r.inspector2), safeVal(r.inspector3), safeVal(r.hora_inicio), safeVal(r.hora_fin),
+        JSON.stringify(r.items_rendicion || []), safeVal(r.total_gastado), safeVal(r.viaticos), 
+        safeVal(r.observaciones), safeVal(r.detalles), safeVal(r.realizado), safeVal(r.estado), safeVal(r.motivo_revision)
       ]
     );
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error("Error en rendiciones:", err); 
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.put('/api/rendiciones/:id/estado', async (req, res) => {
@@ -269,7 +275,7 @@ app.put('/api/rendiciones/:id/estado', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- ENDPOINTS DE VIÁTICOS (CON TODOS LOS CAMPOS) ---
+// --- ENDPOINTS DE VIÁTICOS ---
 app.get('/api/viaticos/general', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM viaticos');
@@ -303,15 +309,18 @@ app.post('/api/viaticos', async (req, res) => {
         total = EXCLUDED.total, detalles = EXCLUDED.detalles, realizado = EXCLUDED.realizado,
         observaciones = EXCLUDED.observaciones, estado = EXCLUDED.estado, motivo_revision = EXCLUDED.motivo_revision`,
       [
-        r.id, r.os, r.username_creador, r.area, r.fecha_sol, r.lugar_servicio, r.proyecto,
-        r.fecha_salida, r.fecha_inicio, r.fecha_termino, r.dias_ope, r.ejecutivo,
-        r.inspector1, r.inspector2, r.inspector3, r.hora_inicio, r.hora_fin,
-        JSON.stringify(r.items_viatico || []), r.total, r.detalles, r.realizado, 
-        r.observaciones, r.estado, r.motivo_revision
+        safeVal(r.id), safeVal(r.os), safeVal(r.username_creador), safeVal(r.area), safeVal(r.fecha_sol), safeVal(r.lugar_servicio), safeVal(r.proyecto),
+        safeVal(r.fecha_salida), safeVal(r.fecha_inicio), safeVal(r.fecha_termino), safeVal(r.dias_ope), safeVal(r.ejecutivo),
+        safeVal(r.inspector1), safeVal(r.inspector2), safeVal(r.inspector3), safeVal(r.hora_inicio), safeVal(r.hora_fin),
+        JSON.stringify(r.items_viatico || []), safeVal(r.total), safeVal(r.detalles), safeVal(r.realizado), 
+        safeVal(r.observaciones), safeVal(r.estado), safeVal(r.motivo_revision)
       ]
     );
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error("Error en viaticos:", err);
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.put('/api/viaticos/:id/estado', async (req, res) => {
@@ -322,7 +331,7 @@ app.put('/api/viaticos/:id/estado', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- VERIFICACIÓN DE EQUIPOS (NUEVO ENDPOINT FALTANTE) ---
+// --- VERIFICACIÓN DE EQUIPOS ---
 app.get('/api/verificaciones/:os', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM verificaciones WHERE os = $1', [req.params.os]);
@@ -346,8 +355,8 @@ app.post('/api/verificaciones', async (req, res) => {
         fecha_ultima_calibracion = EXCLUDED.fecha_ultima_calibracion, estado_fisico = EXCLUDED.estado_fisico,
         funcionamiento = EXCLUDED.funcionamiento, control_operativo = EXCLUDED.control_operativo, anomalias = EXCLUDED.anomalias`,
       [
-        r.id, r.os, r.equipo, r.marca, r.modelo, r.codigo, r.nro_serie,
-        r.fecha_verificacion, r.calibracion_vigente, r.fecha_ultima_calibracion,
+        safeVal(r.id), safeVal(r.os), safeVal(r.equipo), safeVal(r.marca), safeVal(r.modelo), safeVal(r.codigo), safeVal(r.nro_serie),
+        safeVal(r.fecha_verificacion), safeVal(r.calibracion_vigente), safeVal(r.fecha_ultima_calibracion),
         JSON.stringify(r.estado_fisico || {}), JSON.stringify(r.funcionamiento || {}),
         JSON.stringify(r.control_operativo || {}), JSON.stringify(r.anomalias || [])
       ]
@@ -393,7 +402,7 @@ app.post('/api/hoja-ruta', async (req, res) => {
   try {
     await pool.query(
       'UPDATE asignaciones SET modules_data = jsonb_set(COALESCE(modules_data, \'{}\'::jsonb), \'{hoja_ruta}\', $1::jsonb) WHERE os = $2',
-      [JSON.stringify(r), r.os]
+      [JSON.stringify(r), safeVal(r.os)]
     );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }

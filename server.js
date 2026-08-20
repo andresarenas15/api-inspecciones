@@ -14,8 +14,16 @@ const pool = new Pool({
   family: 4  
 });
 
-// Helper para evitar errores "undefined" o strings vacíos en fechas/números
-const safeVal = (v) => (v !== undefined && v !== '') ? v : null;
+// NUEVA FUNCIÓN DE SANEAMIENTO
+const safeVal = (v) => {
+  if (v === undefined || v === null || v === '' || 
+      String(v).trim().toLowerCase() === 'undefined' || 
+      String(v).trim().toLowerCase() === 'null' || 
+      String(v).trim().toLowerCase() === 'nan') {
+    return null; // Fuerza un NULL real para que la BD lo acepte (fechas, foráneas, numéricos)
+  }
+  return v;
+};
 
 // Inicialización de la estructura relacional y EXPANSIÓN FORZADA DE TABLAS EXISTENTES
 async function initDB() {

@@ -14,107 +14,84 @@ const pool = new Pool({
   family: 4  
 });
 
-// NUEVA FUNCIÓN DE SANEAMIENTO (ESTRICTA)
+// FUNCIÓN DE SANEAMIENTO (ESTRICTA)
 const safeVal = (v) => {
   if (v === undefined || v === null || v === '' || 
       String(v).trim().toLowerCase() === 'undefined' || 
       String(v).trim().toLowerCase() === 'null' || 
       String(v).trim().toLowerCase() === 'nan') {
-    return null; // Fuerza un NULL real para que la BD lo acepte (fechas, foráneas, numéricos)
+    return null;
   }
   return v;
 };
 
-// Inicialización de la estructura relacional y EXPANSIÓN FORZADA DE TABLAS EXISTENTES
+// =========================================================
+// INICIALIZACIÓN Y MIGRACIÓN DINÁMICA DE LA BASE DE DATOS
+// =========================================================
 async function initDB() {
   try {
-    // 1. Crear tablas si no existen
+    // 1. Crear tablas base y nuevas tablas relacionales (Hojas de ruta, anomalías, subcontratas)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS usuarios (
-        id SERIAL PRIMARY KEY,
-        username VARCHAR(100) UNIQUE NOT NULL,
-        fullname VARCHAR(255) NOT NULL,
-        role VARCHAR(50) NOT NULL,
-        password VARCHAR(255) NOT NULL
+        id SERIAL PRIMARY KEY, username VARCHAR(100) UNIQUE NOT NULL, fullname VARCHAR(255) NOT NULL,
+        role VARCHAR(50) NOT NULL, password VARCHAR(255) NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS asignaciones (
-        os VARCHAR(100) PRIMARY KEY,
-        id VARCHAR(100),
-        project VARCHAR(255),
-        client VARCHAR(255),
-        ins VARCHAR(100),
-        start TIMESTAMP,
-        "end" TIMESTAMP,
-        state VARCHAR(50) DEFAULT 'Asignada',
-        day INT,
-        tasks JSONB,
-        addresses JSONB,
-        reporteConfig JSONB,
-        progress NUMERIC DEFAULT 0.0,
+        os VARCHAR(100) PRIMARY KEY, id VARCHAR(100), project VARCHAR(255), client VARCHAR(255),
+        ins VARCHAR(100), start TIMESTAMP, "end" TIMESTAMP, state VARCHAR(50) DEFAULT 'Asignada',
+        day INT, tasks JSONB, addresses JSONB, reporteConfig JSONB, progress NUMERIC DEFAULT 0.0,
         modules_data JSONB DEFAULT '{}'::jsonb
       );
 
       CREATE TABLE IF NOT EXISTS rendiciones (
-        id VARCHAR(100) PRIMARY KEY,
-        os VARCHAR(100) REFERENCES asignaciones(os) ON DELETE CASCADE,
-        username_creador VARCHAR(100),
-        ejecutivo VARCHAR(255),
-        observaciones TEXT,
-        detalles TEXT,
-        total_gastado NUMERIC,
-        estado VARCHAR(50) DEFAULT 'Pendiente',
-        motivo_revision TEXT,
+        id VARCHAR(100) PRIMARY KEY, os VARCHAR(100) REFERENCES asignaciones(os) ON DELETE CASCADE,
+        username_creador VARCHAR(100), ejecutivo VARCHAR(255), observaciones TEXT, detalles TEXT,
+        total_gastado NUMERIC, estado VARCHAR(50) DEFAULT 'Pendiente', motivo_revision TEXT,
         items_rendicion JSONB
       );
 
       CREATE TABLE IF NOT EXISTS viaticos (
-        id VARCHAR(100) PRIMARY KEY,
-        os VARCHAR(100) REFERENCES asignaciones(os) ON DELETE CASCADE,
-        username_creador VARCHAR(100),
-        ejecutivo VARCHAR(255),
-        dias_ope INT,
-        detalles TEXT,
-        total NUMERIC,
-        estado VARCHAR(50) DEFAULT 'Pendiente',
-        motivo_revision TEXT,
+        id VARCHAR(100) PRIMARY KEY, os VARCHAR(100) REFERENCES asignaciones(os) ON DELETE CASCADE,
+        username_creador VARCHAR(100), ejecutivo VARCHAR(255), dias_ope INT, detalles TEXT,
+        total NUMERIC, estado VARCHAR(50) DEFAULT 'Pendiente', motivo_revision TEXT,
         items_viatico JSONB
       );
 
       CREATE TABLE IF NOT EXISTS verificaciones (
-        id VARCHAR(100) PRIMARY KEY,
-        os VARCHAR(100),
-        equipo VARCHAR(255),
-        marca VARCHAR(100),
-        modelo VARCHAR(100),
-        codigo VARCHAR(100),
-        nro_serie VARCHAR(100),
-        fecha_verificacion TIMESTAMP,
-        calibracion_vigente VARCHAR(50),
-        fecha_ultima_calibracion TIMESTAMP,
-        estado_fisico JSONB,
-        funcionamiento JSONB,
-        control_operativo JSONB,
-        anomalias JSONB
+        id VARCHAR(100) PRIMARY KEY, os VARCHAR(100), equipo VARCHAR(255), marca VARCHAR(100),
+        modelo VARCHAR(100), codigo VARCHAR(100), nro_serie VARCHAR(100), fecha_verificacion TIMESTAMP,
+        calibracion_vigente VARCHAR(50), fecha_ultima_calibracion TIMESTAMP,
+        estado_fisico JSONB, funcionamiento JSONB, control_operativo JSONB, anomalias JSONB
+      );
+
+      -- NUEVA TABLA: Dependiente de verificaciones (Cumpliendo arquitectura 1 a N)
+      CREATE TABLE IF NOT EXISTS anomalias (
+        id SERIAL PRIMARY KEY,
+        verificacion_id VARCHAR(100) REFERENCES verificaciones(id) ON DELETE CASCADE,
+        datos JSONB NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS reporte_campo (
-        id SERIAL PRIMARY KEY,
-        os VARCHAR(100),
-        submatriz VARCHAR(255),
-        parametro VARCHAR(255),
-        punto VARCHAR(100),
-        reporte TEXT
+        id SERIAL PRIMARY KEY, os VARCHAR(100), submatriz VARCHAR(255), parametro VARCHAR(255),
+        punto VARCHAR(100), reporte TEXT
       );
 
-      -- NUEVA TABLA: INDEPENDENCIA DE HOJA DE RUTA (Observación 4)
       CREATE TABLE IF NOT EXISTS hojas_ruta (
         os VARCHAR(100) PRIMARY KEY REFERENCES asignaciones(os) ON DELETE CASCADE,
         datos JSONB
       );
+
+      -- NUEVA TABLA: Subcontratas (Cumpliendo arquitectura)
+      CREATE TABLE IF NOT EXISTS subcontratas (
+        id SERIAL PRIMARY KEY,
+        os VARCHAR(100) REFERENCES asignaciones(os) ON DELETE CASCADE,
+        datos JSONB
+      );
     `);
 
-    // 2. FORZAR EXPANSIÓN DE TABLAS EXISTENTES
+    // 2. FORZAR LA EXPANSIÓN A MODELO DINÁMICO JSONB EN LAS TABLAS ANTIGUAS
+    // Agregamos la columna 'datos' a todas las operativas para inyectar cargas dinámicas sin perder retrocompatibilidad
     await pool.query(`
       ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS area VARCHAR(100);
       ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS fecha_sol TIMESTAMP;
@@ -131,6 +108,7 @@ async function initDB() {
       ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS hora_fin VARCHAR(20);
       ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS viaticos NUMERIC;
       ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS realizado VARCHAR(100);
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS datos JSONB DEFAULT '{}'::jsonb; -- COLUMNA DINÁMICA
 
       ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS area VARCHAR(100);
       ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS fecha_sol TIMESTAMP;
@@ -146,9 +124,13 @@ async function initDB() {
       ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS hora_fin VARCHAR(20);
       ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS realizado VARCHAR(100);
       ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS observaciones TEXT;
+      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS datos JSONB DEFAULT '{}'::jsonb; -- COLUMNA DINÁMICA
+
+      ALTER TABLE verificaciones ADD COLUMN IF NOT EXISTS datos JSONB DEFAULT '{}'::jsonb; -- COLUMNA DINÁMICA
+      ALTER TABLE reporte_campo ADD COLUMN IF NOT EXISTS datos JSONB DEFAULT '{}'::jsonb; -- COLUMNA DINÁMICA
     `);
 
-    console.log("[PostgreSQL] Tablas inicializadas y columnas faltantes agregadas con éxito.");
+    console.log("[PostgreSQL] Arquitectura Relacional-Dinámica inicializada con éxito.");
   } catch (err) {
     console.error("[PostgreSQL] Error crítico al inicializar la base de datos:", err);
   }
@@ -156,7 +138,9 @@ async function initDB() {
 
 initDB();
 
-// --- ENDPOINTS DE USUARIOS ---
+// ==========================================
+// ENDPOINTS DE USUARIOS Y ASIGNACIONES
+// ==========================================
 app.get('/api/usuarios', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM usuarios');
@@ -167,10 +151,7 @@ app.get('/api/usuarios', async (req, res) => {
 app.post('/api/usuarios', async (req, res) => {
   const { username, fullname, role, password } = req.body;
   try {
-    const result = await pool.query(
-      'INSERT INTO usuarios (username, fullname, role, password) VALUES ($1, $2, $3, $4) RETURNING *',
-      [username, fullname, role, password]
-    );
+    const result = await pool.query('INSERT INTO usuarios (username, fullname, role, password) VALUES ($1, $2, $3, $4) RETURNING *', [username, fullname, role, password]);
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -182,26 +163,18 @@ app.delete('/api/usuarios/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- ENDPOINTS DE ASIGNACIONES ---
 app.get('/api/asignaciones/general', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM asignaciones');
-    const asignacionesFix = result.rows.map(row => ({
-      ...row,
-      reporteConfig: row.reporteconfig || row.reporteConfig || null
-    }));
+    const asignacionesFix = result.rows.map(row => ({ ...row, reporteConfig: row.reporteconfig || row.reporteConfig || null }));
     res.json(asignacionesFix);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/asignaciones/:username', async (req, res) => {
-  const { username } = req.params;
   try {
-    const result = await pool.query('SELECT * FROM asignaciones WHERE LOWER(ins) = LOWER($1)', [username]);
-    const asignacionesFix = result.rows.map(row => ({
-      ...row,
-      reporteConfig: row.reporteconfig || row.reporteConfig || null
-    }));
+    const result = await pool.query('SELECT * FROM asignaciones WHERE LOWER(ins) = LOWER($1)', [req.params.username]);
+    const asignacionesFix = result.rows.map(row => ({ ...row, reporteConfig: row.reporteconfig || row.reporteConfig || null }));
     res.json(asignacionesFix);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -209,9 +182,7 @@ app.get('/api/asignaciones/:username', async (req, res) => {
 app.post('/api/asignaciones', async (req, res) => {
   const r = req.body;
   const osLimpia = safeVal(r.os);
-  
   if (!osLimpia) return res.status(400).json({ error: "OS inválida o indefinida" });
-
   try {
     await pool.query(
       `INSERT INTO asignaciones (os, id, project, client, ins, start, "end", state, day, tasks, addresses, reporteConfig, progress)
@@ -226,50 +197,46 @@ app.post('/api/asignaciones', async (req, res) => {
 app.post('/api/asignaciones/:os/modulo', async (req, res) => {
   const osLimpia = safeVal(req.params.os);
   const { moduloName, data } = req.body;
-  
   if (!osLimpia) return res.status(400).json({ error: "OS inválida o indefinida" });
-
   try {
     await pool.query(
-      `UPDATE asignaciones 
-       SET modules_data = jsonb_set(COALESCE(modules_data, '{}'::jsonb), ARRAY[$1], $2::jsonb)
-       WHERE os = $3`,
+      `UPDATE asignaciones SET modules_data = jsonb_set(COALESCE(modules_data, '{}'::jsonb), ARRAY[$1], $2::jsonb) WHERE os = $3`,
       [moduloName, JSON.stringify(data), osLimpia]
     );
     res.json({ success: true, message: `Módulo ${moduloName} guardado` });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- ENDPOINTS DE RENDICIONES ---
+// ==========================================
+// ENDPOINTS DE RENDICIONES (DINÁMICO)
+// ==========================================
 app.get('/api/rendiciones/general', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM rendiciones');
-    res.json(result.rows);
+    // Fusiona los datos relacionales antiguos con el JSONB dinámico (Retrocompatibilidad total)
+    res.json(result.rows.map(r => ({ ...r, ...(r.datos || {}) })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/rendiciones/:username', async (req, res) => {
   try {
-    // CORRECCIÓN 1: Búsqueda Insensitive para el Monitorista
     const result = await pool.query('SELECT * FROM rendiciones WHERE LOWER(username_creador) = LOWER($1)', [req.params.username]);
-    res.json(result.rows);
+    res.json(result.rows.map(r => ({ ...r, ...(r.datos || {}) })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/rendiciones', async (req, res) => {
   const r = req.body;
   const osLimpia = safeVal(r.os);
-
   if (!osLimpia) return res.status(400).json({ error: "No se puede guardar una rendición sin OS." });
-
   try {
     await pool.query(
       `INSERT INTO rendiciones (
         id, os, username_creador, area, fecha_sol, lugar_servicio, proyecto,
         fecha_salida, fecha_inicio, fecha_termino, dias_ope, ejecutivo,
         inspector1, inspector2, inspector3, hora_inicio, hora_fin,
-        items_rendicion, total_gastado, viaticos, observaciones, detalles, realizado, estado, motivo_revision
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+        items_rendicion, total_gastado, viaticos, observaciones, detalles, realizado, estado, motivo_revision, datos
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
       ON CONFLICT (id) DO UPDATE SET 
         area = EXCLUDED.area, fecha_sol = EXCLUDED.fecha_sol, lugar_servicio = EXCLUDED.lugar_servicio,
         proyecto = EXCLUDED.proyecto, fecha_salida = EXCLUDED.fecha_salida, fecha_inicio = EXCLUDED.fecha_inicio,
@@ -277,13 +244,15 @@ app.post('/api/rendiciones', async (req, res) => {
         inspector1 = EXCLUDED.inspector1, inspector2 = EXCLUDED.inspector2, inspector3 = EXCLUDED.inspector3,
         hora_inicio = EXCLUDED.hora_inicio, hora_fin = EXCLUDED.hora_fin, items_rendicion = EXCLUDED.items_rendicion,
         total_gastado = EXCLUDED.total_gastado, viaticos = EXCLUDED.viaticos, observaciones = EXCLUDED.observaciones,
-        detalles = EXCLUDED.detalles, realizado = EXCLUDED.realizado, estado = EXCLUDED.estado, motivo_revision = EXCLUDED.motivo_revision`,
+        detalles = EXCLUDED.detalles, realizado = EXCLUDED.realizado, estado = EXCLUDED.estado, motivo_revision = EXCLUDED.motivo_revision,
+        datos = EXCLUDED.datos`,
       [
         safeVal(r.id), osLimpia, safeVal(r.username_creador), safeVal(r.area), safeVal(r.fecha_sol), safeVal(r.lugar_servicio), safeVal(r.proyecto),
         safeVal(r.fecha_salida), safeVal(r.fecha_inicio), safeVal(r.fecha_termino), safeVal(r.dias_ope), safeVal(r.ejecutivo),
         safeVal(r.inspector1), safeVal(r.inspector2), safeVal(r.inspector3), safeVal(r.hora_inicio), safeVal(r.hora_fin),
         JSON.stringify(r.items_rendicion || []), safeVal(r.total_gastado), safeVal(r.viaticos), 
-        safeVal(r.observaciones), safeVal(r.detalles), safeVal(r.realizado), safeVal(r.estado), safeVal(r.motivo_revision)
+        safeVal(r.observaciones), safeVal(r.detalles), safeVal(r.realizado), safeVal(r.estado), safeVal(r.motivo_revision),
+        JSON.stringify(r) // <- AQUÍ INYECTAMOS LA CARGA DINÁMICA COMPLETA
       ]
     );
     res.json({ success: true });
@@ -301,36 +270,35 @@ app.put('/api/rendiciones/:id/estado', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- ENDPOINTS DE VIÁTICOS ---
+// ==========================================
+// ENDPOINTS DE VIÁTICOS (DINÁMICO)
+// ==========================================
 app.get('/api/viaticos/general', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM viaticos');
-    res.json(result.rows);
+    res.json(result.rows.map(r => ({ ...r, ...(r.datos || {}) })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/viaticos/:username', async (req, res) => {
   try {
-    // CORRECCIÓN 1: Búsqueda Insensitive
     const result = await pool.query('SELECT * FROM viaticos WHERE LOWER(username_creador) = LOWER($1)', [req.params.username]);
-    res.json(result.rows);
+    res.json(result.rows.map(r => ({ ...r, ...(r.datos || {}) })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/viaticos', async (req, res) => {
   const r = req.body;
   const osLimpia = safeVal(r.os);
-
   if (!osLimpia) return res.status(400).json({ error: "No se puede guardar un viático sin OS." });
-
   try {
     await pool.query(
       `INSERT INTO viaticos (
         id, os, username_creador, area, fecha_sol, lugar_servicio, proyecto,
         fecha_salida, fecha_inicio, fecha_termino, dias_ope, ejecutivo,
         inspector1, inspector2, inspector3, hora_inicio, hora_fin,
-        items_viatico, total, detalles, realizado, observaciones, estado, motivo_revision
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+        items_viatico, total, detalles, realizado, observaciones, estado, motivo_revision, datos
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
       ON CONFLICT (id) DO UPDATE SET 
         area = EXCLUDED.area, fecha_sol = EXCLUDED.fecha_sol, lugar_servicio = EXCLUDED.lugar_servicio,
         proyecto = EXCLUDED.proyecto, fecha_salida = EXCLUDED.fecha_salida, fecha_inicio = EXCLUDED.fecha_inicio,
@@ -338,13 +306,15 @@ app.post('/api/viaticos', async (req, res) => {
         inspector1 = EXCLUDED.inspector1, inspector2 = EXCLUDED.inspector2, inspector3 = EXCLUDED.inspector3,
         hora_inicio = EXCLUDED.hora_inicio, hora_fin = EXCLUDED.hora_fin, items_viatico = EXCLUDED.items_viatico,
         total = EXCLUDED.total, detalles = EXCLUDED.detalles, realizado = EXCLUDED.realizado,
-        observaciones = EXCLUDED.observaciones, estado = EXCLUDED.estado, motivo_revision = EXCLUDED.motivo_revision`,
+        observaciones = EXCLUDED.observaciones, estado = EXCLUDED.estado, motivo_revision = EXCLUDED.motivo_revision,
+        datos = EXCLUDED.datos`,
       [
         safeVal(r.id), osLimpia, safeVal(r.username_creador), safeVal(r.area), safeVal(r.fecha_sol), safeVal(r.lugar_servicio), safeVal(r.proyecto),
         safeVal(r.fecha_salida), safeVal(r.fecha_inicio), safeVal(r.fecha_termino), safeVal(r.dias_ope), safeVal(r.ejecutivo),
         safeVal(r.inspector1), safeVal(r.inspector2), safeVal(r.inspector3), safeVal(r.hora_inicio), safeVal(r.hora_fin),
         JSON.stringify(r.items_viatico || []), safeVal(r.total), safeVal(r.detalles), safeVal(r.realizado), 
-        safeVal(r.observaciones), safeVal(r.estado), safeVal(r.motivo_revision)
+        safeVal(r.observaciones), safeVal(r.estado), safeVal(r.motivo_revision),
+        JSON.stringify(r) // <- CARGA DINÁMICA
       ]
     );
     res.json({ success: true });
@@ -362,11 +332,14 @@ app.put('/api/viaticos/:id/estado', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- VERIFICACIÓN DE EQUIPOS ---
+// ==========================================
+// ENDPOINTS DE VERIFICACIÓN (TRANSACCIONES RELACIONALES)
+// ==========================================
 app.get('/api/verificaciones/:os', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM verificaciones WHERE os = $1', [req.params.os]);
-    res.json(result.rows);
+    // El frontend Flutter necesita el JSON unificado que envió, el cual tenemos guardado en "datos"
+    res.json(result.rows.map(r => ({ ...r, ...(r.datos || {}) })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -375,35 +348,66 @@ app.post('/api/verificaciones', async (req, res) => {
   const osLimpia = safeVal(r.os);
   if (!osLimpia) return res.status(400).json({ error: "OS inválida" });
 
+  const anomalias = r.anomalias || [];
+  const client = await pool.connect();
+
   try {
-    await pool.query(
+    // START TRANSACTION: Se aseguran los registros principales (Verificacion) y los dependientes (Anomalias)
+    await client.query('BEGIN');
+
+    // 1. Guardar la Verificación general (Mantiene compatibilidad de columnas + Inyección de Payload dinámico)
+    await client.query(
       `INSERT INTO verificaciones (
         id, os, equipo, marca, modelo, codigo, nro_serie,
         fecha_verificacion, calibracion_vigente, fecha_ultima_calibracion,
-        estado_fisico, funcionamiento, control_operativo, anomalias
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        estado_fisico, funcionamiento, control_operativo, anomalias, datos
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       ON CONFLICT (id) DO UPDATE SET
         os = EXCLUDED.os, equipo = EXCLUDED.equipo, marca = EXCLUDED.marca,
         modelo = EXCLUDED.modelo, codigo = EXCLUDED.codigo, nro_serie = EXCLUDED.nro_serie,
         fecha_verificacion = EXCLUDED.fecha_verificacion, calibracion_vigente = EXCLUDED.calibracion_vigente,
         fecha_ultima_calibracion = EXCLUDED.fecha_ultima_calibracion, estado_fisico = EXCLUDED.estado_fisico,
-        funcionamiento = EXCLUDED.funcionamiento, control_operativo = EXCLUDED.control_operativo, anomalias = EXCLUDED.anomalias`,
+        funcionamiento = EXCLUDED.funcionamiento, control_operativo = EXCLUDED.control_operativo, 
+        anomalias = EXCLUDED.anomalias, datos = EXCLUDED.datos`,
       [
         safeVal(r.id), osLimpia, safeVal(r.equipo), safeVal(r.marca), safeVal(r.modelo), safeVal(r.codigo), safeVal(r.nro_serie),
         safeVal(r.fecha_verificacion), safeVal(r.calibracion_vigente), safeVal(r.fecha_ultima_calibracion),
         JSON.stringify(r.estado_fisico || {}), JSON.stringify(r.funcionamiento || {}),
-        JSON.stringify(r.control_operativo || {}), JSON.stringify(r.anomalias || [])
+        JSON.stringify(r.control_operativo || {}), JSON.stringify(anomalias),
+        JSON.stringify(r)
       ]
     );
+
+    // 2. Arquitectura de Anomalías Independiente (Se borran previas para este ID y se insertan actualizadas)
+    await client.query('DELETE FROM anomalias WHERE verificacion_id = $1', [r.id]);
+    for (let i = 0; i < anomalias.length; i++) {
+      await client.query('INSERT INTO anomalias (verificacion_id, datos) VALUES ($1, $2)', [r.id, JSON.stringify(anomalias[i])]);
+    }
+
+    await client.query('COMMIT');
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: err.message }); 
+  } finally {
+    client.release();
+  }
 });
 
-// --- REPORTE DE CAMPO ---
+// ==========================================
+// ENDPOINTS DE REPORTE DE CAMPO (UPSERT INTELIGENTE)
+// ==========================================
 app.get('/api/reporte-campo/:os', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM reporte_campo WHERE os = $1', [req.params.os]);
-    res.json(result.rows);
+    res.json(result.rows.map(r => ({ ...r, ...(r.datos || {}) })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/reporte-campo/:os/:parametro', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM reporte_campo WHERE os = $1 AND parametro = $2', [req.params.os, req.params.parametro]);
+    res.json(result.rows.map(r => ({ ...r, ...(r.datos || {}) })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -413,21 +417,31 @@ app.post('/api/reporte-campo', async (req, res) => {
   if (!osLimpia) return res.status(400).json({ error: "OS inválida" });
 
   try {
-    await pool.query('INSERT INTO reporte_campo (os, submatriz, parametro, punto, reporte) VALUES ($1, $2, $3, $4, $5)', 
-    [osLimpia, r.submatriz, r.parametro, r.punto, r.reporte]);
+    // En lugar de chocar con constraints, el backend verifica primero
+    if (r.id) {
+      await pool.query('UPDATE reporte_campo SET reporte = $1, datos = $2 WHERE id = $3', [r.reporte, JSON.stringify(r), r.id]);
+    } else {
+      const check = await pool.query('SELECT id FROM reporte_campo WHERE os = $1 AND punto = $2 AND parametro = $3', [osLimpia, r.punto, r.parametro]);
+      if (check.rows.length > 0) {
+        await pool.query('UPDATE reporte_campo SET reporte = $1, datos = $2 WHERE id = $3', [r.reporte, JSON.stringify(r), check.rows[0].id]);
+      } else {
+        await pool.query('INSERT INTO reporte_campo (os, submatriz, parametro, punto, reporte, datos) VALUES ($1, $2, $3, $4, $5, $6)', 
+        [osLimpia, r.submatriz, r.parametro, r.punto, r.reporte, JSON.stringify(r)]);
+      }
+    }
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- HOJA DE RUTA (ACTUALIZADO - Observación 4) ---
+// ==========================================
+// ENDPOINTS DE HOJA DE RUTA
+// ==========================================
 app.get('/api/hoja-ruta/:os', async (req, res) => {
   try {
-    // Primero intentamos buscar en la nueva tabla independiente
     const result = await pool.query('SELECT datos FROM hojas_ruta WHERE os = $1', [req.params.os]);
     if (result.rows.length > 0) {
       res.json(result.rows[0].datos);
     } else {
-      // Fallback: Si no está en la tabla nueva, buscamos en el JSONB antiguo por compatibilidad
       const resultLegacy = await pool.query('SELECT modules_data FROM asignaciones WHERE os = $1', [req.params.os]);
       res.json(resultLegacy.rows[0] ? resultLegacy.rows[0].modules_data?.hoja_ruta : null);
     }
@@ -438,30 +452,39 @@ app.post('/api/hoja-ruta', async (req, res) => {
   const r = req.body;
   const osLimpia = safeVal(r.os);
 
-  // Filtro impenetrable
-  if (!osLimpia) {
-    return res.status(400).json({ error: "Orden de Servicio (OS) inválida o ausente." });
-  }
+  if (!osLimpia) return res.status(400).json({ error: "Orden de Servicio (OS) inválida o ausente." });
 
   try {
-    // 1. Guardado robusto en la nueva tabla dedicada
-    await pool.query(
-      `INSERT INTO hojas_ruta (os, datos) VALUES ($1, $2)
-       ON CONFLICT (os) DO UPDATE SET datos = EXCLUDED.datos`,
-      [osLimpia, JSON.stringify(r)]
-    );
-
-    // 2. Mantenemos también la inyección en asignaciones (modules_data) para evitar 
-    // romper tu frontend o tu app móvil si aún apuntan a ese campo.
-    await pool.query(
-      'UPDATE asignaciones SET modules_data = jsonb_set(COALESCE(modules_data, \'{}\'::jsonb), \'{hoja_ruta}\', $1::jsonb) WHERE os = $2',
-      [JSON.stringify(r), osLimpia]
-    );
-
+    await pool.query(`INSERT INTO hojas_ruta (os, datos) VALUES ($1, $2) ON CONFLICT (os) DO UPDATE SET datos = EXCLUDED.datos`, [osLimpia, JSON.stringify(r)]);
+    await pool.query('UPDATE asignaciones SET modules_data = jsonb_set(COALESCE(modules_data, \'{}\'::jsonb), \'{hoja_ruta}\', $1::jsonb) WHERE os = $2', [JSON.stringify(r), osLimpia]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ==========================================
+// NUEVO: ENDPOINTS DE SUBCONTRATAS
+// ==========================================
+app.get('/api/subcontratas/:os', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM subcontratas WHERE os = $1', [req.params.os]);
+    res.json(result.rows.map(r => ({ id: r.id, os: r.os, ...r.datos })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/subcontratas', async (req, res) => {
+  const r = req.body;
+  const osLimpia = safeVal(r.os);
+  if (!osLimpia) return res.status(400).json({ error: "OS inválida" });
+
+  try {
+    await pool.query('INSERT INTO subcontratas (os, datos) VALUES ($1, $2)', [osLimpia, JSON.stringify(r)]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ==========================================
+// ARRANQUE DEL SERVIDOR
+// ==========================================
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Servidor PostgreSQL conectado y operando en el puerto ${PORT}`);

@@ -6,6 +6,7 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 
+// Conexión segura forzando IPv4
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
@@ -13,6 +14,7 @@ const pool = new Pool({
   family: 4  
 });
 
+// FUNCIÓN DE SANEAMIENTO (ESTRICTA)
 const safeVal = (v) => {
   if (v === undefined || v === null || v === '' || 
       String(v).trim().toLowerCase() === 'undefined' || 
@@ -47,6 +49,9 @@ const agruparSufijos = (payload, sufijoTarget, nombreArray) => {
   return payload;
 };
 
+// =========================================================
+// INICIALIZACIÓN Y MIGRACIÓN DINÁMICA DE LA BASE DE DATOS
+// =========================================================
 async function initDB() {
   try {
     await pool.query(`
@@ -485,6 +490,9 @@ app.post('/api/subcontratas', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ==========================================
+// ARRANQUE DEL SERVIDOR (CON BIND HOST 0.0.0.0)
+// ==========================================
 const PORT = process.env.PORT || 10000;
 const HOST = '0.0.0.0';
 

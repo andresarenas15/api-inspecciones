@@ -93,6 +93,23 @@ async function initDB() {
     // 2. FORZAR LA EXPANSIÓN A MODELO DINÁMICO JSONB EN LAS TABLAS ANTIGUAS
     // Agregamos la columna 'datos' a todas las operativas para inyectar cargas dinámicas sin perder retrocompatibilidad
     await pool.query(`
+
+      // FORZAR ACTUALIZACIÓN DE LA TABLA ASIGNACIONES
+      ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS id VARCHAR(100);
+      ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS project VARCHAR(255);
+      ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS client VARCHAR(255);
+      ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS ins VARCHAR(100);
+      ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS start TIMESTAMP;
+      ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS "end" TIMESTAMP;
+      ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS state VARCHAR(50) DEFAULT 'Asignada';
+      ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS day INT;
+      ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS tasks JSONB;
+      ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS addresses JSONB;
+      ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS reporteConfig JSONB;
+      ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS progress NUMERIC DEFAULT 0.0;
+      ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS modules_data JSONB DEFAULT '{}'::jsonb;
+
+      
       ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS area VARCHAR(100);
       ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS fecha_sol TIMESTAMP;
       ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS lugar_servicio VARCHAR(255);

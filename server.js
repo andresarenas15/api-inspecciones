@@ -25,12 +25,35 @@ const safeVal = (v) => {
   return v;
 };
 
+// FUNCIÓN PARA AGRUPAR SUFIJOS DINÁMICOS DESDE FLUTTER
+const agruparSufijos = (payload, sufijoTarget, nombreArray) => {
+  const arr = [];
+  const regex = new RegExp(`^(.*)_${sufijoTarget}(\\d+)$`);
+  
+  Object.keys(payload).forEach(key => {
+    const match = key.match(regex);
+    if (match) {
+      const prop = match[1];
+      const index = parseInt(match[2]) - 1;
+      
+      if (!arr[index]) arr[index] = {};
+      arr[index][prop] = payload[key];
+      
+      delete payload[key]; 
+    }
+  });
+  
+  const cleanArr = arr.filter(item => item !== null && item !== undefined);
+  if (cleanArr.length > 0) payload[nombreArray] = cleanArr;
+  
+  return payload;
+};
+
 // =========================================================
 // INICIALIZACIÓN Y MIGRACIÓN DINÁMICA DE LA BASE DE DATOS
 // =========================================================
 async function initDB() {
   try {
-    // 1. Crear tablas base y nuevas tablas relacionales (Hojas de ruta, anomalías, subcontratas)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS usuarios (
         id SERIAL PRIMARY KEY, username VARCHAR(100) UNIQUE NOT NULL, fullname VARCHAR(255) NOT NULL,
@@ -65,7 +88,6 @@ async function initDB() {
         estado_fisico JSONB, funcionamiento JSONB, control_operativo JSONB, anomalias JSONB
       );
 
-      -- NUEVA TABLA: Dependiente de verificaciones (Cumpliendo arquitectura 1 a N)
       CREATE TABLE IF NOT EXISTS anomalias (
         id SERIAL PRIMARY KEY,
         verificacion_id VARCHAR(100) REFERENCES verificaciones(id) ON DELETE CASCADE,
@@ -82,7 +104,6 @@ async function initDB() {
         datos JSONB
       );
 
-      -- NUEVA TABLA: Subcontratas (Cumpliendo arquitectura)
       CREATE TABLE IF NOT EXISTS subcontratas (
         id SERIAL PRIMARY KEY,
         os VARCHAR(100) REFERENCES asignaciones(os) ON DELETE CASCADE,
@@ -90,11 +111,7 @@ async function initDB() {
       );
     `);
 
-    // 2. FORZAR LA EXPANSIÓN A MODELO DINÁMICO JSONB EN LAS TABLAS ANTIGUAS
-    // Agregamos la columna 'datos' a todas las operativas para inyectar cargas dinámicas sin perder retrocompatibilidad
     await pool.query(`
-
-      // FORZAR ACTUALIZACIÓN DE LA TABLA ASIGNACIONES
       ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS id VARCHAR(100);
       ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS project VARCHAR(255);
       ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS client VARCHAR(255);
@@ -108,8 +125,7 @@ async function initDB() {
       ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS reporteConfig JSONB;
       ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS progress NUMERIC DEFAULT 0.0;
       ALTER TABLE asignaciones ADD COLUMN IF NOT EXISTS modules_data JSONB DEFAULT '{}'::jsonb;
-
-      
+     
       ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS area VARCHAR(100);
       ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS fecha_sol TIMESTAMP;
       ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS lugar_servicio VARCHAR(255);
@@ -125,7 +141,7 @@ async function initDB() {
       ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS hora_fin VARCHAR(20);
       ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS viaticos NUMERIC;
       ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS realizado VARCHAR(100);
-      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS datos JSONB DEFAULT '{}'::jsonb; -- COLUMNA DINÁMICA
+      ALTER TABLE rendiciones ADD COLUMN IF NOT EXISTS datos JSONB DEFAULT '{}'::jsonb;
 
       ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS area VARCHAR(100);
       ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS fecha_sol TIMESTAMP;
@@ -141,10 +157,10 @@ async function initDB() {
       ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS hora_fin VARCHAR(20);
       ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS realizado VARCHAR(100);
       ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS observaciones TEXT;
-      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS datos JSONB DEFAULT '{}'::jsonb; -- COLUMNA DINÁMICA
+      ALTER TABLE viaticos ADD COLUMN IF NOT EXISTS datos JSONB DEFAULT '{}'::jsonb;
 
-      ALTER TABLE verificaciones ADD COLUMN IF NOT EXISTS datos JSONB DEFAULT '{}'::jsonb; -- COLUMNA DINÁMICA
-      ALTER TABLE reporte_campo ADD COLUMN IF NOT EXISTS datos JSONB DEFAULT '{}'::jsonb; -- COLUMNA DINÁMICA
+      ALTER TABLE verificaciones ADD COLUMN IF NOT EXISTS datos JSONB DEFAULT '{}'::jsonb;
+      ALTER TABLE reporte_campo ADD COLUMN IF NOT EXISTS datos JSONB DEFAULT '{}'::jsonb;
     `);
 
     console.log("[PostgreSQL] Arquitectura Relacional-Dinámica inicializada con éxito.");
@@ -155,9 +171,6 @@ async function initDB() {
 
 initDB();
 
-// ==========================================
-// ENDPOINTS DE USUARIOS Y ASIGNACIONES
-// ==========================================
 app.get('/api/usuarios', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM usuarios');
@@ -224,13 +237,9 @@ app.post('/api/asignaciones/:os/modulo', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ==========================================
-// ENDPOINTS DE RENDICIONES (DINÁMICO)
-// ==========================================
 app.get('/api/rendiciones/general', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM rendiciones');
-    // Fusiona los datos relacionales antiguos con el JSONB dinámico (Retrocompatibilidad total)
     res.json(result.rows.map(r => ({ ...r, ...(r.datos || {}) })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -269,7 +278,7 @@ app.post('/api/rendiciones', async (req, res) => {
         safeVal(r.inspector1), safeVal(r.inspector2), safeVal(r.inspector3), safeVal(r.hora_inicio), safeVal(r.hora_fin),
         JSON.stringify(r.items_rendicion || []), safeVal(r.total_gastado), safeVal(r.viaticos), 
         safeVal(r.observaciones), safeVal(r.detalles), safeVal(r.realizado), safeVal(r.estado), safeVal(r.motivo_revision),
-        JSON.stringify(r) // <- AQUÍ INYECTAMOS LA CARGA DINÁMICA COMPLETA
+        JSON.stringify(r)
       ]
     );
     res.json({ success: true });
@@ -287,9 +296,6 @@ app.put('/api/rendiciones/:id/estado', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ==========================================
-// ENDPOINTS DE VIÁTICOS (DINÁMICO)
-// ==========================================
 app.get('/api/viaticos/general', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM viaticos');
@@ -331,7 +337,7 @@ app.post('/api/viaticos', async (req, res) => {
         safeVal(r.inspector1), safeVal(r.inspector2), safeVal(r.inspector3), safeVal(r.hora_inicio), safeVal(r.hora_fin),
         JSON.stringify(r.items_viatico || []), safeVal(r.total), safeVal(r.detalles), safeVal(r.realizado), 
         safeVal(r.observaciones), safeVal(r.estado), safeVal(r.motivo_revision),
-        JSON.stringify(r) // <- CARGA DINÁMICA
+        JSON.stringify(r)
       ]
     );
     res.json({ success: true });
@@ -349,13 +355,9 @@ app.put('/api/viaticos/:id/estado', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ==========================================
-// ENDPOINTS DE VERIFICACIÓN (TRANSACCIONES RELACIONALES)
-// ==========================================
 app.get('/api/verificaciones/:os', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM verificaciones WHERE os = $1', [req.params.os]);
-    // El frontend Flutter necesita el JSON unificado que envió, el cual tenemos guardado en "datos"
     res.json(result.rows.map(r => ({ ...r, ...(r.datos || {}) })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -369,10 +371,7 @@ app.post('/api/verificaciones', async (req, res) => {
   const client = await pool.connect();
 
   try {
-    // START TRANSACTION: Se aseguran los registros principales (Verificacion) y los dependientes (Anomalias)
     await client.query('BEGIN');
-
-    // 1. Guardar la Verificación general (Mantiene compatibilidad de columnas + Inyección de Payload dinámico)
     await client.query(
       `INSERT INTO verificaciones (
         id, os, equipo, marca, modelo, codigo, nro_serie,
@@ -395,7 +394,6 @@ app.post('/api/verificaciones', async (req, res) => {
       ]
     );
 
-    // 2. Arquitectura de Anomalías Independiente (Se borran previas para este ID y se insertan actualizadas)
     await client.query('DELETE FROM anomalias WHERE verificacion_id = $1', [r.id]);
     for (let i = 0; i < anomalias.length; i++) {
       await client.query('INSERT INTO anomalias (verificacion_id, datos) VALUES ($1, $2)', [r.id, JSON.stringify(anomalias[i])]);
@@ -411,9 +409,6 @@ app.post('/api/verificaciones', async (req, res) => {
   }
 });
 
-// ==========================================
-// ENDPOINTS DE REPORTE DE CAMPO (UPSERT INTELIGENTE)
-// ==========================================
 app.get('/api/reporte-campo/:os', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM reporte_campo WHERE os = $1', [req.params.os]);
@@ -434,7 +429,6 @@ app.post('/api/reporte-campo', async (req, res) => {
   if (!osLimpia) return res.status(400).json({ error: "OS inválida" });
 
   try {
-    // En lugar de chocar con constraints, el backend verifica primero
     if (r.id) {
       await pool.query('UPDATE reporte_campo SET reporte = $1, datos = $2 WHERE id = $3', [r.reporte, JSON.stringify(r), r.id]);
     } else {
@@ -450,9 +444,6 @@ app.post('/api/reporte-campo', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ==========================================
-// ENDPOINTS DE HOJA DE RUTA
-// ==========================================
 app.get('/api/hoja-ruta/:os', async (req, res) => {
   try {
     const result = await pool.query('SELECT datos FROM hojas_ruta WHERE os = $1', [req.params.os]);
@@ -466,10 +457,13 @@ app.get('/api/hoja-ruta/:os', async (req, res) => {
 });
 
 app.post('/api/hoja-ruta', async (req, res) => {
-  const r = req.body;
+  let r = req.body;
   const osLimpia = safeVal(r.os);
 
   if (!osLimpia) return res.status(400).json({ error: "Orden de Servicio (OS) inválida o ausente." });
+
+  // TRADUCCIÓN DINÁMICA: Agrupación de sufijos _parX en 'paradas'
+  r = agruparSufijos(r, 'par', 'paradas');
 
   try {
     await pool.query(`INSERT INTO hojas_ruta (os, datos) VALUES ($1, $2) ON CONFLICT (os) DO UPDATE SET datos = EXCLUDED.datos`, [osLimpia, JSON.stringify(r)]);
@@ -478,9 +472,6 @@ app.post('/api/hoja-ruta', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ==========================================
-// NUEVO: ENDPOINTS DE SUBCONTRATAS
-// ==========================================
 app.get('/api/subcontratas/:os', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM subcontratas WHERE os = $1', [req.params.os]);
@@ -500,9 +491,11 @@ app.post('/api/subcontratas', async (req, res) => {
 });
 
 // ==========================================
-// ARRANQUE DEL SERVIDOR
+// ARRANQUE DEL SERVIDOR (CON BIND HOST 0.0.0.0)
 // ==========================================
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`Servidor PostgreSQL conectado y operando en el puerto ${PORT}`);
+const HOST = '0.0.0.0';
+
+app.listen(PORT, HOST, () => {
+  console.log(`Servidor PostgreSQL conectado y operando en http://${HOST}:${PORT}`);
 });

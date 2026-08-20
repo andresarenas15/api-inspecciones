@@ -493,7 +493,7 @@ app.post('/api/subcontratas', async (req, res) => {
 // ==========================================
 // ARRANQUE DEL SERVIDOR (CON BIND HOST 0.0.0.0)
 // ==========================================
-const PORT = process.env.PORT || 1000;
+const PORT = process.env.PORT || 10000;
 const HOST = '0.0.0.0';
 
 app.listen(PORT, HOST, () => {

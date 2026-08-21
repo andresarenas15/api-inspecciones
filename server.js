@@ -249,12 +249,11 @@ async function saveRen(c, r) {
   const q = await c.query(`INSERT INTO rendiciones_os(id_os,username_creador,datos_generales,total_gastado_ren,total_via,devolver_ren,estado,motivo_revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id_os) DO UPDATE SET username_creador=EXCLUDED.username_creador,datos_generales=EXCLUDED.datos_generales,total_gastado_ren=EXCLUDED.total_gastado_ren,total_via=EXCLUDED.total_via,devolver_ren=EXCLUDED.devolver_ren,estado=EXCLUDED.estado,motivo_revision=EXCLUDED.motivo_revision RETURNING id_rendicion`, [os.id_os, r.username_creador, js(g), spent, deposited, back, 'PENDIENTE', null]);
   const id = q.rows[0].id_rendicion, ids = await replace(c, { table: 'items_rendicion', parentCol: 'id_rendicion', numberCol: 'numero_item', idCol: 'id_item_rendicion', parentId: id, items: set });
   let i = 0; for (const [n, item] of set) {
-    const itemId = ids[i++], stored = arr(item[`adjuntos_ren${n}`] || item.adjuntos).map((content, index) => ({ content, mime: index === 1 ? 'application/pdf' : 'image/jpeg' }));
-    if (!stored.length) {
-      const image = item[`archivo_base64_ren${n}`] || item.archivo_base64, pdf = item[`archivo_pdf_base64_ren${n}`] || item.archivo_pdf_base64;
-      if (clean(image)) stored.push({ content: image, mime: 'image/jpeg' });
-      if (clean(pdf)) stored.push({ content: pdf, mime: 'application/pdf' });
-    }
+    const itemId = ids[i++], stored = [];
+    const image = item[`archivo_base64_ren${n}`] || item.archivo_base64, pdf = item[`archivo_pdf_base64_ren${n}`] || item.archivo_pdf_base64;
+    if (clean(image)) stored.push({ content: image, mime: 'image/jpeg' });
+    if (clean(pdf)) stored.push({ content: pdf, mime: 'application/pdf' });
+    if (!stored.length) arr(item[`adjuntos_ren${n}`] || item.adjuntos).forEach((content, index) => stored.push({ content, mime: index === 1 ? 'application/pdf' : 'image/jpeg' }));
     for (let a = 0; a < stored.length; a++) await file(c, 'item_rendicion', itemId, `adjunto_ren${n}_${a + 1}`, stored[a].mime, stored[a].content);
   }
   return { id_rendicion: id, total_gastado_ren: spent, total_via: deposited, devolver_ren: back };
@@ -278,7 +277,13 @@ app.put('/api/rendiciones/:id/estado', async (req, res) => { try { res.json((awa
 
 // Reportes, subcontrata y agregado OS
 const reportView = r => ({ ...(r.datos || {}), ...r, descripcion: (r.datos || {}).descripcion || '' });
-app.get('/api/reporte-campo/:os/:parametro', async (req, res) => { try { const args = [req.params.os, req.params.parametro], filter = clean(req.query.submatriz); if (filter) args.push(filter); const sql = `SELECT * FROM reporte_campo WHERE os=$1 AND parametro=$2${filter ? ' AND submatriz=$3' : ''} ORDER BY creado_en,id`; res.json((await pool.query(sql, args)).rows.map(reportView)); } catch (e) { fail(res, e, 'REPORTE_PARAM'); } });
+app.get('/api/reporte-campo/:os/:parametro', async (req, res) => { try {
+  const args = [req.params.os, req.params.parametro], clauses = ['os=$1', 'parametro=$2'];
+  const matrix = clean(req.query.matriz), submatrix = clean(req.query.submatriz);
+  if (matrix) { args.push(matrix); clauses.push(`matriz=$${args.length}`); }
+  if (submatrix) { args.push(submatrix); clauses.push(`submatriz=$${args.length}`); }
+  res.json((await pool.query(`SELECT * FROM reporte_campo WHERE ${clauses.join(' AND ')} ORDER BY creado_en,id`, args)).rows.map(reportView));
+} catch (e) { fail(res, e, 'REPORTE_PARAM'); } });
 app.get('/api/reporte-campo/:os', async (req, res) => { try { res.json((await pool.query('SELECT * FROM reporte_campo WHERE os=$1 ORDER BY submatriz,parametro,creado_en,id', [req.params.os])).rows.map(reportView)); } catch (e) { fail(res, e, 'REPORTE_GET'); } });
 app.post('/api/reporte-campo', async (req, res) => { const r = req.body; try { const saved = await tx(async c => {
   const os = await osRow(c, r.os), data = js({ ...r, descripcion: clean(r.descripcion) || '' });

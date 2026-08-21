@@ -129,10 +129,18 @@ app.post('/api/verificaciones', async (req, res) => {
 });
 
 // Hoja de ruta y paradas
-function stops(r) { const f = flat(r, 'par'); return f.size ? f : arrayItems(r.paradas, 'par', 'numero_parada'); }
+function meaningfulStop(data, n) {
+  const a = alias(data, `_par${n}`);
+  return ['lugar', 'descrip', 'gps', 'foto', 'gps_abas', 'foto_precio', 'foto_combini', 'foto_combfin'].some(key => clean(a[key]) !== null);
+}
+function stops(r) {
+  const f = flat(r, 'par'), source = f.size ? f : arrayItems(r.paradas, 'par', 'numero_parada'), out = new Map();
+  for (const [n, data] of source) if (meaningfulStop(data, n)) out.set(n, data);
+  return out;
+}
 async function readRoute(c, os) {
   const h = (await c.query('SELECT * FROM hojas_ruta_os WHERE id_os=$1', [os.id_os])).rows[0]; if (!h) return null;
-  const ps = (await c.query('SELECT * FROM paradas_ruta WHERE id_hoja_ruta=$1 ORDER BY numero_parada', [h.id_hoja_ruta])).rows;
+  const ps = (await c.query('SELECT * FROM paradas_ruta WHERE id_hoja_ruta=$1 ORDER BY numero_parada', [h.id_hoja_ruta])).rows.filter(p => meaningfulStop(p.items, p.numero_parada));
   const out = { id_hoja_ruta: h.id_hoja_ruta, os: os.codigo_os, ...h.datos_ruta, ...h.salida, ...h.estado };
   out.placa = out.placa_vehiculo;
   out.isHojaConcluida = out.is_hoja_concluida;
@@ -241,7 +249,7 @@ async function saveVia(c, r) {
 async function readRen(c, os) {
   const r = (await c.query('SELECT * FROM rendiciones_os WHERE id_os=$1', [os.id_os])).rows[0]; if (!r) return null;
   const items = (await c.query('SELECT * FROM items_rendicion WHERE id_rendicion=$1 ORDER BY numero_item', [r.id_rendicion])).rows;
-  const out = { id: r.id_rendicion, id_rendicion: r.id_rendicion, os: os.codigo_os, username_creador: r.username_creador, ...renGeneral(r.datos_generales), total_gastado: num(r.total_gastado_ren), total_gastado_ren: num(r.total_gastado_ren), viaticos: r.total_via, total_via: r.total_via, devolver_ren: r.devolver_ren, estado: status(r.estado), motivo_revision: r.motivo_revision };
+  const out = { id: r.id_rendicion, id_rendicion: r.id_rendicion, os: os.codigo_os, username_creador: r.username_creador, ...renGeneral(r.datos_generales), total_gastado: num(r.total_gastado_ren), total_gastado_ren: num(r.total_gastado_ren), viaticos: r.total_via === null ? null : num(r.total_via), total_via: r.total_via === null ? null : num(r.total_via), devolver_ren: r.devolver_ren === null ? null : num(r.devolver_ren), estado: status(r.estado), motivo_revision: r.motivo_revision };
   out.items_rendicion = items.map(i => { const a = alias(i.items, `_ren${i.numero_item}`), attached = arr(a.adjuntos); return { id_item_rendicion: i.id_item_rendicion, numero_item: i.numero_item, items: i.items, ...a, nro_comprobante: a.num_comprobante, archivo_base64: a.archivo_base64 || attached[0] || null, archivo_pdf_base64: a.archivo_pdf_base64 || attached[1] || null }; }); items.forEach(i => Object.assign(out, i.items)); return out;
 }
 async function saveRen(c, r) {

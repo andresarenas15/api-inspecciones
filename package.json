@@ -1,14 +1,18 @@
 {
-  "name": "api-inspecciones",
+  "name": "api-inspecciones-relacional",
   "version": "1.0.0",
-  "description": "API Backend Oficial con PostgreSQL",
+  "private": true,
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "check": "node --check server.js"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "pg": "^8.11.3"
+    "express": "^5.1.0",
+    "pg": "^8.16.3"
   }
 }

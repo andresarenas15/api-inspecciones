@@ -14,6 +14,7 @@ const clean = v => {
 const arr = v => Array.isArray(v) ? v : [];
 const obj = v => v && typeof v === 'object' && !Array.isArray(v) ? v : {};
 const num = v => { const n = Number(String(v ?? 0).replace(',', '.')); return Number.isFinite(n) ? n : 0; };
+const status = v => String(v || 'PENDIENTE').trim().toUpperCase();
 const js = v => JSON.stringify(v ?? null);
 const fail = (res, e, tag) => { console.error(`[${tag}] status=ERROR message=${e.message}`); res.status(e.status || 500).json({ error: { code: e.status === 404 ? 'NOT_FOUND' : 'DATABASE_ERROR', message: e.message } }); };
 const log = (tag, os, id, count = 1) => console.log(`[${tag}] os=${os} id=${id} registros=${count} status=OK`);
@@ -108,6 +109,7 @@ async function readVerifications(c, os) {
     item.calibracion_vigente = item.calib_vig;
     item.fecha_ultima_calibracion = item.fecha_ult_cal;
     item.fotos = an.map(a => a.items[`foto_ver${v.numero_verificacion}_${a.numero_anomalia}`]).filter(Boolean);
+    item.evidencias_evaluacion = Object.entries(v.items || {}).filter(([k, value]) => k.startsWith('foto_') && clean(value)).map(([campo, contenido]) => ({ campo, contenido }));
     item.detalle_anomalia = an.map(a => a.items[`desc_anom_ver${v.numero_verificacion}_${a.numero_anomalia}`]).filter(Boolean).join(' | ');
     an.forEach(a => Object.assign(item, a.items)); out.push(item);
   } return out;
@@ -119,6 +121,7 @@ app.post('/api/verificaciones', async (req, res) => {
     const os = await osRow(c, code), items = flat(r, 'ver').get(n) || obj(r.items);
     const q = await c.query(`INSERT INTO verificaciones_os(id_os,numero_verificacion,items) VALUES($1,$2,$3) ON CONFLICT(id_os,numero_verificacion) DO UPDATE SET items=EXCLUDED.items RETURNING id_verificacion`, [os.id_os, n, js(items)]);
     const id = q.rows[0].id_verificacion, anomalies = children(r, 'ver').get(n) || arrayItems(r.anomalias, 'anom', 'numero_anomalia');
+    for (const [key, content] of Object.entries(items)) if (key.startsWith('foto_')) await file(c, 'verificacion', id, `${key}.jpg`, 'image/jpeg', content);
     const ids = await replace(c, { table: 'anomalias_verificacion', parentCol: 'id_verificacion', numberCol: 'numero_anomalia', idCol: 'id_anomalia', parentId: id, items: anomalies });
     let i = 0; for (const [m, data] of anomalies) await file(c, 'anomalia', ids[i++], `foto_ver${n}_${m}.jpg`, 'image/jpeg', data[`foto_ver${n}_${m}`]);
     return { id_verificacion: id, numero_verificacion: n };
@@ -137,7 +140,7 @@ async function readRoute(c, os) {
   out.gpsSalida = out.gps_salida;
   out.foto_combustible = out.foto_comb;
   out.salida = { gps: out.gps_salida, fecha: out.fecha_hora_salida, hora: out.fecha_hora_salida, km: out.km_salida, foto_km: out.foto_km, foto_combustible: out.foto_comb };
-  out.paradas = ps.map(p => { const a = alias(p.items, `_par${p.numero_parada}`); return { id_parada: p.id_parada, numero_parada: p.numero_parada, items: p.items, ...a, descripcion: a.descrip, gpsParada: a.gps, observacion: a.descrip }; }); ps.forEach(p => Object.assign(out, p.items)); return out;
+  out.paradas = ps.map(p => { const a = alias(p.items, `_par${p.numero_parada}`); return { id_parada: p.id_parada, numero_parada: p.numero_parada, items: p.items, ...a, descripcion: a.descrip, gpsParada: a.gps, observacion: a.descrip, fecha_hora: a.fecha_hora, fechaHora: a.fecha_hora, fecha: a.fecha_hora, hora: a.fecha_hora }; }); ps.forEach(p => Object.assign(out, p.items)); return out;
 }
 app.get('/api/hoja-ruta/:os', async (req, res) => { try { res.json(await tx(async c => readRoute(c, await osRow(c, req.params.os)))); } catch (e) { fail(res, e, 'HOJA_RUTA_GET'); } });
 app.post('/api/hoja-ruta', async (req, res) => {
@@ -224,12 +227,12 @@ function renGeneral(g) {
 async function readVia(c, os) {
   const v = (await c.query('SELECT * FROM solicitudes_viatico WHERE id_os=$1', [os.id_os])).rows[0]; if (!v) return null;
   const items = (await c.query('SELECT * FROM items_viatico WHERE id_solicitud_viatico=$1 ORDER BY numero_item', [v.id_solicitud_viatico])).rows;
-  const out = { id: v.id_solicitud_viatico, id_solicitud_viatico: v.id_solicitud_viatico, os: os.codigo_os, username_creador: v.username_creador, ...viaGeneral(v.datos_generales), total: num(v.total_via), total_via: num(v.total_via), estado: v.estado, motivo_revision: v.motivo_revision };
+  const out = { id: v.id_solicitud_viatico, id_solicitud_viatico: v.id_solicitud_viatico, os: os.codigo_os, username_creador: v.username_creador, ...viaGeneral(v.datos_generales), total: num(v.total_via), total_via: num(v.total_via), estado: status(v.estado), motivo_revision: v.motivo_revision };
   out.items_viatico = items.map(i => ({ id_item_viatico: i.id_item_viatico, numero_item: i.numero_item, items: i.items, ...alias(i.items, `_via${i.numero_item}`) })); items.forEach(i => Object.assign(out, i.items)); return out;
 }
 async function saveVia(c, r) {
   const os = await osRow(c, r.os), set = itemSet(r, 'via', 'items_viatico'), amount = total(set, 'via'), g = viaGeneral(general(r, 'via'));
-  const q = await c.query(`INSERT INTO solicitudes_viatico(id_os,username_creador,datos_generales,total_via,estado,motivo_revision) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id_os) DO UPDATE SET username_creador=EXCLUDED.username_creador,datos_generales=EXCLUDED.datos_generales,total_via=EXCLUDED.total_via,estado=EXCLUDED.estado,motivo_revision=EXCLUDED.motivo_revision RETURNING id_solicitud_viatico`, [os.id_os, r.username_creador, js(g), amount, r.estado || 'PENDIENTE', r.motivo_revision]);
+  const q = await c.query(`INSERT INTO solicitudes_viatico(id_os,username_creador,datos_generales,total_via,estado,motivo_revision) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id_os) DO UPDATE SET username_creador=EXCLUDED.username_creador,datos_generales=EXCLUDED.datos_generales,total_via=EXCLUDED.total_via,estado=EXCLUDED.estado,motivo_revision=EXCLUDED.motivo_revision RETURNING id_solicitud_viatico`, [os.id_os, r.username_creador, js(g), amount, status(r.estado), r.motivo_revision]);
   const id = q.rows[0].id_solicitud_viatico;
   await replace(c, { table: 'items_viatico', parentCol: 'id_solicitud_viatico', numberCol: 'numero_item', idCol: 'id_item_viatico', parentId: id, items: set });
   await c.query('UPDATE rendiciones_os SET total_via=$2,devolver_ren=$2-total_gastado_ren WHERE id_os=$1', [os.id_os, amount]);
@@ -238,14 +241,22 @@ async function saveVia(c, r) {
 async function readRen(c, os) {
   const r = (await c.query('SELECT * FROM rendiciones_os WHERE id_os=$1', [os.id_os])).rows[0]; if (!r) return null;
   const items = (await c.query('SELECT * FROM items_rendicion WHERE id_rendicion=$1 ORDER BY numero_item', [r.id_rendicion])).rows;
-  const out = { id: r.id_rendicion, id_rendicion: r.id_rendicion, os: os.codigo_os, username_creador: r.username_creador, ...renGeneral(r.datos_generales), total_gastado: num(r.total_gastado_ren), total_gastado_ren: num(r.total_gastado_ren), viaticos: r.total_via, total_via: r.total_via, devolver_ren: r.devolver_ren, estado: r.estado, motivo_revision: r.motivo_revision };
-  out.items_rendicion = items.map(i => ({ id_item_rendicion: i.id_item_rendicion, numero_item: i.numero_item, items: i.items, ...alias(i.items, `_ren${i.numero_item}`) })); items.forEach(i => Object.assign(out, i.items)); return out;
+  const out = { id: r.id_rendicion, id_rendicion: r.id_rendicion, os: os.codigo_os, username_creador: r.username_creador, ...renGeneral(r.datos_generales), total_gastado: num(r.total_gastado_ren), total_gastado_ren: num(r.total_gastado_ren), viaticos: r.total_via, total_via: r.total_via, devolver_ren: r.devolver_ren, estado: status(r.estado), motivo_revision: r.motivo_revision };
+  out.items_rendicion = items.map(i => { const a = alias(i.items, `_ren${i.numero_item}`), attached = arr(a.adjuntos); return { id_item_rendicion: i.id_item_rendicion, numero_item: i.numero_item, items: i.items, ...a, nro_comprobante: a.num_comprobante, archivo_base64: a.archivo_base64 || attached[0] || null, archivo_pdf_base64: a.archivo_pdf_base64 || attached[1] || null }; }); items.forEach(i => Object.assign(out, i.items)); return out;
 }
 async function saveRen(c, r) {
   const os = await osRow(c, r.os), set = itemSet(r, 'ren', 'items_rendicion'), spent = total(set, 'ren'), g = renGeneral(general(r, 'ren')), via = (await c.query('SELECT total_via FROM solicitudes_viatico WHERE id_os=$1', [os.id_os])).rows[0], deposited = via ? via.total_via : null, back = deposited === null ? null : num(deposited) - spent;
-  const q = await c.query(`INSERT INTO rendiciones_os(id_os,username_creador,datos_generales,total_gastado_ren,total_via,devolver_ren,estado,motivo_revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id_os) DO UPDATE SET username_creador=EXCLUDED.username_creador,datos_generales=EXCLUDED.datos_generales,total_gastado_ren=EXCLUDED.total_gastado_ren,total_via=EXCLUDED.total_via,devolver_ren=EXCLUDED.devolver_ren,estado=EXCLUDED.estado,motivo_revision=EXCLUDED.motivo_revision RETURNING id_rendicion`, [os.id_os, r.username_creador, js(g), spent, deposited, back, r.estado || 'PENDIENTE', r.motivo_revision]);
+  const q = await c.query(`INSERT INTO rendiciones_os(id_os,username_creador,datos_generales,total_gastado_ren,total_via,devolver_ren,estado,motivo_revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id_os) DO UPDATE SET username_creador=EXCLUDED.username_creador,datos_generales=EXCLUDED.datos_generales,total_gastado_ren=EXCLUDED.total_gastado_ren,total_via=EXCLUDED.total_via,devolver_ren=EXCLUDED.devolver_ren,estado=EXCLUDED.estado,motivo_revision=EXCLUDED.motivo_revision RETURNING id_rendicion`, [os.id_os, r.username_creador, js(g), spent, deposited, back, status(r.estado), r.motivo_revision]);
   const id = q.rows[0].id_rendicion, ids = await replace(c, { table: 'items_rendicion', parentCol: 'id_rendicion', numberCol: 'numero_item', idCol: 'id_item_rendicion', parentId: id, items: set });
-  let i = 0; for (const [n, item] of set) { const itemId = ids[i++]; let attached = item[`adjuntos_ren${n}`] || item.adjuntos || []; const webFile = item[`archivo_base64_ren${n}`] || item.archivo_base64; if (!arr(attached).length && clean(webFile)) attached = [webFile]; for (let a = 0; a < arr(attached).length; a++) await file(c, 'item_rendicion', itemId, `adjunto_ren${n}_${a + 1}`, a === 1 ? 'application/pdf' : 'image/jpeg', attached[a]); }
+  let i = 0; for (const [n, item] of set) {
+    const itemId = ids[i++], stored = arr(item[`adjuntos_ren${n}`] || item.adjuntos).map((content, index) => ({ content, mime: index === 1 ? 'application/pdf' : 'image/jpeg' }));
+    if (!stored.length) {
+      const image = item[`archivo_base64_ren${n}`] || item.archivo_base64, pdf = item[`archivo_pdf_base64_ren${n}`] || item.archivo_pdf_base64;
+      if (clean(image)) stored.push({ content: image, mime: 'image/jpeg' });
+      if (clean(pdf)) stored.push({ content: pdf, mime: 'application/pdf' });
+    }
+    for (let a = 0; a < stored.length; a++) await file(c, 'item_rendicion', itemId, `adjunto_ren${n}_${a + 1}`, stored[a].mime, stored[a].content);
+  }
   return { id_rendicion: id, total_gastado_ren: spent, total_via: deposited, devolver_ren: back };
 }
 async function listBy(c, table, userColumn, user, reader) {
@@ -257,13 +268,13 @@ app.get('/api/viaticos/os/:os', async (req, res) => { try { const v = await tx(a
 app.get('/api/viaticos/:username', async (req, res) => { try { res.json(await tx(c => listBy(c, 'solicitudes_viatico', 'username_creador', req.params.username, readVia))); } catch (e) { fail(res, e, 'VIATICOS_USER'); } });
 app.post('/api/viaticos', async (req, res) => { try { const s = await tx(c => saveVia(c, req.body)); log('VIATICOS_UPSERT', req.body.os, s.id_solicitud_viatico); res.status(201).json({ success: true, id: s.id_solicitud_viatico, ...s }); } catch (e) { fail(res, e, 'VIATICOS_UPSERT'); } });
 app.put('/api/viaticos/:id', async (req, res) => { try { const s = await tx(async c => { const os = await osRow(c, req.body.os); const current = (await c.query('SELECT id_solicitud_viatico FROM solicitudes_viatico WHERE id_os=$1', [os.id_os])).rows[0]; if (!current || current.id_solicitud_viatico !== req.params.id) { const e = new Error('La solicitud no corresponde a la OS'); e.status = 409; throw e; } return saveVia(c, req.body); }); res.json({ success: true, id: s.id_solicitud_viatico, ...s }); } catch (e) { fail(res, e, 'VIATICOS_UPDATE'); } });
-app.put('/api/viaticos/:id/estado', async (req, res) => { try { res.json((await pool.query('UPDATE solicitudes_viatico SET estado=$1,motivo_revision=$2 WHERE id_solicitud_viatico=$3 RETURNING *', [req.body.estado, req.body.motivo_revision, req.params.id])).rows[0]); } catch (e) { fail(res, e, 'VIATICOS_ESTADO'); } });
+app.put('/api/viaticos/:id/estado', async (req, res) => { try { res.json((await pool.query('UPDATE solicitudes_viatico SET estado=$1,motivo_revision=$2 WHERE id_solicitud_viatico=$3 RETURNING *', [status(req.body.estado), req.body.motivo_revision, req.params.id])).rows[0]); } catch (e) { fail(res, e, 'VIATICOS_ESTADO'); } });
 app.get('/api/rendiciones/general', async (_req, res) => { try { res.json(await tx(c => listBy(c, 'rendiciones_os', 'username_creador', null, readRen))); } catch (e) { fail(res, e, 'RENDICIONES_GENERAL'); } });
 app.get('/api/rendiciones/os/:os', async (req, res) => { try { const r = await tx(async c => readRen(c, await osRow(c, req.params.os))); res.json(r ? [r] : []); } catch (e) { fail(res, e, 'RENDICIONES_OS'); } });
 app.get('/api/rendiciones/:username', async (req, res) => { try { res.json(await tx(c => listBy(c, 'rendiciones_os', 'username_creador', req.params.username, readRen))); } catch (e) { fail(res, e, 'RENDICIONES_USER'); } });
 app.post('/api/rendiciones', async (req, res) => { try { const s = await tx(c => saveRen(c, req.body)); log('RENDICIONES_UPSERT', req.body.os, s.id_rendicion); res.status(201).json({ success: true, id: s.id_rendicion, ...s }); } catch (e) { fail(res, e, 'RENDICIONES_UPSERT'); } });
 app.put('/api/rendiciones/:id', async (req, res) => { try { const s = await tx(async c => { const os = await osRow(c, req.body.os); const current = (await c.query('SELECT id_rendicion FROM rendiciones_os WHERE id_os=$1', [os.id_os])).rows[0]; if (!current || current.id_rendicion !== req.params.id) { const e = new Error('La rendición no corresponde a la OS'); e.status = 409; throw e; } return saveRen(c, req.body); }); res.json({ success: true, id: s.id_rendicion, ...s }); } catch (e) { fail(res, e, 'RENDICIONES_UPDATE'); } });
-app.put('/api/rendiciones/:id/estado', async (req, res) => { try { res.json((await pool.query('UPDATE rendiciones_os SET estado=$1,motivo_revision=$2 WHERE id_rendicion=$3 RETURNING *', [req.body.estado, req.body.motivo_revision, req.params.id])).rows[0]); } catch (e) { fail(res, e, 'RENDICIONES_ESTADO'); } });
+app.put('/api/rendiciones/:id/estado', async (req, res) => { try { res.json((await pool.query('UPDATE rendiciones_os SET estado=$1,motivo_revision=$2 WHERE id_rendicion=$3 RETURNING *', [status(req.body.estado), req.body.motivo_revision, req.params.id])).rows[0]); } catch (e) { fail(res, e, 'RENDICIONES_ESTADO'); } });
 
 // Reportes, subcontrata y agregado OS
 app.get('/api/reporte-campo/:os/:parametro', async (req, res) => { try { res.json((await pool.query('SELECT * FROM reporte_campo WHERE os=$1 AND parametro=$2', [req.params.os, req.params.parametro])).rows.map(r => ({ ...r, ...r.datos }))); } catch (e) { fail(res, e, 'REPORTE_PARAM'); } });
